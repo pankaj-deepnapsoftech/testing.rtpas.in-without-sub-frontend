@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { axiosHandler } from "../config/axios";
+import { useCookies } from "react-cookie";
 
 // Shipment Type
 export interface Shipment {
@@ -27,10 +28,11 @@ const PartyStrip: React.FC<{ setDispatchData: (data: Shipment) => void, setShowA
     const [shipmentsData, setShipmentsData] = useState<Shipment[]>([]);
     const [totalPage, setTotalPage] = useState<number>(0);
     const [page, setPage] = useState<number>(1);
+    const [cookies] = useCookies();
 
     const getAllSalesDataForDispatch = async () => {
         try {
-            const res = await axiosHandler.get(`/sale/sales-dispatch-all?page=${page}&limit=9`);
+            const res = await axiosHandler.get(`/sale/sales-dispatch-all?page=${page}&limit=9`, { headers: { Authorization: `Bearer ${cookies.access_token}` } });
             setTotalPage(res.data.totalPage)
             setShipmentsData(res.data.data);
         } catch (error) {
@@ -40,7 +42,7 @@ const PartyStrip: React.FC<{ setDispatchData: (data: Shipment) => void, setShowA
 
     const getAllPendingSalesDataForDispatch = async () => {
         try {
-            const res = await axiosHandler.get(`/sale/sales-dispatch-pending?page=${page}&limit=9`);
+            const res = await axiosHandler.get(`/sale/sales-dispatch-pending?page=${page}&limit=9`, { headers: { Authorization: `Bearer ${cookies.access_token}` } });
             setTotalPage(res.data.totalPage)
             setShipmentsData(res.data.data);
         } catch (error) {
@@ -50,7 +52,7 @@ const PartyStrip: React.FC<{ setDispatchData: (data: Shipment) => void, setShowA
 
     const getAllCompletedSalesDataForDispatch = async () => {
         try {
-            const res = await axiosHandler.get(`/sale/sales-dispatch-completed?page=${page}&limit=9`);
+            const res = await axiosHandler.get(`/sale/sales-dispatch-completed?page=${page}&limit=9`, { headers: { Authorization: `Bearer ${cookies.access_token}` } });
             setShipmentsData(res.data.data);
             setTotalPage(res.data.totalPage)
         } catch (error) {
@@ -88,7 +90,7 @@ const PartyStrip: React.FC<{ setDispatchData: (data: Shipment) => void, setShowA
                         {Object.keys(FilteringTabs).map((tab) => (
                             <button
                                 key={tab}
-                                onClick={() => {setFiltring(tab as FilteringTabs);setPage(1)}}
+                                onClick={() => { setFiltring(tab as FilteringTabs); setPage(1) }}
                                 className={`px-6 py-2 text-sm font-medium rounded-full transition-all duration-300 transform ${tab === filtering
                                     ? "bg-blue-500 text-white shadow-md scale-105"
                                     : "text-slate-600 hover:bg-slate-100 hover:scale-105"

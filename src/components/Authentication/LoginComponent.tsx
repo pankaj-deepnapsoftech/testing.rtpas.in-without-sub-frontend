@@ -9,6 +9,7 @@ import { userExists } from "../../redux/reducers/authSlice";
 import { useState } from "react";
 import { useCookies } from "react-cookie";
 import { colors } from "../../theme/colors";
+import { axiosHandler } from "../../config/axios";
 
 interface LoginComponentProps {
   email: string | undefined;
@@ -57,7 +58,6 @@ const LoginComponent: React.FC<LoginComponentProps> = ({
       } else {
         dispatch(userExists({ ...data.user, role: "emp" }));
       }
-      setCookie("access_token", data.token, { maxAge: 1000 * 60 * 60 * 24 });
       if (data?.user?.isSuper) {
         setCookie("role", "admin", { maxAge: 1000 * 60 * 60 * 24 });
       } else {
@@ -65,6 +65,8 @@ const LoginComponent: React.FC<LoginComponentProps> = ({
           maxAge: 1000 * 60 * 60 * 24,
         });
       }
+      setCookie("access_token", data.token, { maxAge: 1000 * 60 * 60 * 24 });
+     
       setCookie("name", data.user.first_name, { maxAge: 1000 * 60 * 60 * 24 });
       setCookie("email", data.user.email, { maxAge: 1000 * 60 * 60 * 24 });
       toast.success(data.message);
