@@ -1632,36 +1632,26 @@ const PurchaseOrder: React.FC = () => {
                                 }
                                 onChange={(e) => {
                                   const inputValue = e.target.value;
+                                  const targetId = item.is_grouped
+                                    ? String(item.item || item.item_name)
+                                    : (item._id || `${item.bom_name}-${item.item_name}`);
                                   
-                                  // Allow empty string for typing
                                   if (inputValue === "" || inputValue === "-") {
-                                    handleStockUpdate(
-                                      item.item || item._id || `${item.bom_name}-${item.item_name}`, 
-                                      0
-                                    );
+                                    handleStockUpdate(targetId, 0);
                                     return;
                                   }
                                   
-                                  // Remove any non-numeric characters except minus at start
                                   const cleanValue = inputValue.replace(/[^0-9]/g, '');
                                   
                                   if (cleanValue === "") {
-                                    handleStockUpdate(
-                                      item.item || item._id || `${item.bom_name}-${item.item_name}`, 
-                                      0
-                                    );
+                                    handleStockUpdate(targetId, 0);
                                     return;
                                   }
                                   
-                                  // Use parseInt for integer values to avoid decimal issues
                                   const numValue = parseInt(cleanValue, 10);
                                   
-                                  // Only update if valid number and non-negative
                                   if (!isNaN(numValue) && numValue >= 0) {
-                                    handleStockUpdate(
-                                      item.item || item._id || `${item.bom_name}-${item.item_name}`, 
-                                      numValue
-                                    );
+                                    handleStockUpdate(targetId, numValue);
                                   }
                                 }}
                                 onKeyDown={(e) => {
@@ -1780,12 +1770,12 @@ const PurchaseOrder: React.FC = () => {
                                     ? item.updated_price
                                     : item.current_price
                                 }
-                                onChange={(e) =>
-                                  handlePriceUpdate(
-                                    item.item || item._id || `${item.bom_name}-${item.item_name}`, 
-                                    Number(e.target.value)
-                                  )
-                                }
+                                onChange={(e) => {
+                                  const targetId = item.is_grouped
+                                    ? String(item.item || item.item_name)
+                                    : (item._id || `${item.bom_name}-${item.item_name}`);
+                                  handlePriceUpdate(targetId, Number(e.target.value));
+                                }}
                                 className="w-20 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                 placeholder={item.current_price.toString()}
                                 min="0"
