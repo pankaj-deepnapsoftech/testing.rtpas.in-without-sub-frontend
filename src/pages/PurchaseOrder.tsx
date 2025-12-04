@@ -1577,9 +1577,9 @@ const PurchaseOrder: React.FC = () => {
                     <table className="min-w-full divide-y divide-gray-200">
                       <thead className="bg-gray-50">
                         <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          {/* <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             BOM Name
-                          </th>
+                          </th> */}
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Item Name
                           </th>
@@ -1615,9 +1615,9 @@ const PurchaseOrder: React.FC = () => {
                       <tbody className="bg-white divide-y divide-gray-200">
                         {groupedShortages.map((item, idx) => (
                           <tr key={item._id || `${item.bom_name}-${item.item_name}-${idx}`} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {/* <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {item.bom_name || "-"}
-                            </td>
+                            </td> */}
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {item.item_name || "-"}
                             </td>
@@ -2082,7 +2082,7 @@ const PurchaseOrder: React.FC = () => {
                               {item.itemName}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-semibold">
-                              {item.shortageQuantity}
+                              {item.shortageQuantity.toFixed()}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {item.currentStock}
