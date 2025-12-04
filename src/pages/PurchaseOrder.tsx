@@ -787,7 +787,7 @@ const PurchaseOrder: React.FC = () => {
       const processedGroupedItemIds = new Set<string>();
 
       itemsWithStockChanges.forEach((item) => {
-        if (!item._id || !item.updated_stock || item.updated_stock <= 0) return;
+        if (!item.updated_stock || item.updated_stock <= 0) return;
 
         // Check if this is a grouped item
         const groupedItem = groupedShortages.find(
@@ -806,13 +806,21 @@ const PurchaseOrder: React.FC = () => {
           processedGroupedItemIds.add(groupedKey);
           
           const directInput = groupedItemInputs.get(groupedKey);
+          const totalStock =
+            directInput !== undefined && directInput !== null && directInput > 0
+              ? directInput
+              : item.updated_stock;
           
-          if (directInput !== undefined && directInput !== null && directInput > 0) {
+          const productIdForGroup = (groupedItem.item || item.item) ? String(groupedItem.item || item.item) : "";
+
+          if (totalStock && totalStock > 0 && productIdForGroup) {
             // Use exact user input for grouped items
             groupedStockUpdates.set(groupedKey, {
-              totalStock: directInput,
-              itemId: groupedItem.item,
+              totalStock,
+              itemId: productIdForGroup,
             });
+          } else if (!productIdForGroup) {
+            console.warn("Skipping grouped stock update due to missing product ID for", groupedKey);
           }
         } else {
           // For non-grouped items, check if this item is part of a grouped item's underlying shortages
@@ -825,7 +833,7 @@ const PurchaseOrder: React.FC = () => {
           });
           
           // Only add if it's not an underlying item of a grouped item
-          if (!isUnderlyingItem) {
+          if (!isUnderlyingItem && item._id) {
             nonGroupedStockUpdates.push({
               shortageId: item._id,
               stockToAdd: item.updated_stock,
