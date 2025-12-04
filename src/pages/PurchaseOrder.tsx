@@ -298,27 +298,21 @@ const PurchaseOrder: React.FC = () => {
             const shortageId = shortage._id || `${shortage.bom_name}-${shortage.item_name}`;
             const localEdit = localShortageEdits.get(shortageId);
             
-            // Calculate original shortage quantity
-            // If there's a local edit with updated_stock, original = current + updated_stock
-            // Otherwise, current shortage_quantity is the original
-            let originalShortageQty = shortage.shortage_quantity || 0;
-            if (localEdit?.updated_stock && localEdit.updated_stock > 0) {
-              // If stock was added, original shortage = current + stock added
-              originalShortageQty = shortage.shortage_quantity + localEdit.updated_stock;
-            }
+            // Treat the backend-provided shortage as the baseline for local remaining calculation
+            const originalShortageQty = shortage.shortage_quantity || 0;
             
             return {
               ...shortage,
               original_stock: shortage.current_stock,
               // Store original shortage quantity before any updates (for remaining calculation)
               original_shortage_quantity: originalShortageQty,
-              // Use local edit if exists, otherwise use backend value
+              // Use local edit for updated values; ignore backend updated_stock to prevent double subtraction
               updated_price: localEdit?.updated_price !== undefined 
                 ? localEdit.updated_price 
                 : (shortage.updated_price || null),
               updated_stock: localEdit?.updated_stock !== undefined 
                 ? localEdit.updated_stock 
-                : (shortage.updated_stock || null),
+                : null,
             };
           }
         );
@@ -469,6 +463,8 @@ const PurchaseOrder: React.FC = () => {
     field: keyof InventoryUpdateForm,
     value: number
   ) => {
+
+    console.log("th=u===============>>>>>0",value)
     const updatedForm = [...updateInventoryForm];
     const item = updatedForm[index];
 
@@ -496,10 +492,12 @@ const PurchaseOrder: React.FC = () => {
 
   // Handle stock updates in shortages table (local only - no automatic API call)
   const handleStockUpdate = (itemId: string, newStock: number) => {
+
     // Check if this is a grouped item by looking it up in groupedShortages
     const groupedItem = groupedShortages.find(
       (item) => String(item.item) === String(itemId) || item.item_name?.toLowerCase() === itemId?.toLowerCase()
     );
+    
     
     // If it's a grouped item, update all underlying shortage entries
     if (groupedItem && groupedItem.is_grouped && groupedItem.underlying_shortage_ids) {
@@ -513,41 +511,50 @@ const PurchaseOrder: React.FC = () => {
       
       const updatedShortages = [...inventoryShortages];
       const totalShortage = groupedItem.shortage_quantity;
-      
-      // Update all underlying shortage entries proportionally
-      groupedItem.underlying_shortage_ids.forEach((underlyingId) => {
-        const underlyingIndex = updatedShortages.findIndex(
-          (item) => item._id === underlyingId || `${item.bom_name}-${item.item_name}` === underlyingId
-        );
-        
-        if (underlyingIndex !== -1) {
-          const underlyingItem = updatedShortages[underlyingIndex];
-          // Distribute stock proportionally based on each entry's shortage quantity
-          const proportion = underlyingItem.shortage_quantity / totalShortage;
-          const distributedStock = Math.round(newStock * proportion);
-          
-          // Calculate remaining shortage
-          const remainingShortage = Math.max(0, underlyingItem.shortage_quantity - distributedStock);
-          
-          // Track this edit locally
-          const shortageId = underlyingItem._id || `${underlyingItem.bom_name}-${underlyingItem.item_name}`;
-          setLocalShortageEdits((prev) => {
-            const newEdits = new Map(prev);
-            newEdits.set(shortageId, {
-              ...newEdits.get(shortageId),
-              updated_stock: distributedStock > 0 ? distributedStock : null,
-            });
-            return newEdits;
+
+      const indices = groupedItem.underlying_shortage_ids
+        .map((underlyingId: string) =>
+          updatedShortages.findIndex(
+            (item) => item._id === underlyingId || `${item.bom_name}-${item.item_name}` === underlyingId
+          )
+        )
+        .filter((idx: number) => idx !== -1);
+
+      const entries = indices.map((idx: number) => {
+        const u = updatedShortages[idx];
+        const share = (newStock * (u.shortage_quantity / totalShortage)) || 0;
+        const floorShare = Math.floor(share);
+        const frac = share - floorShare;
+        return { idx, floorShare, frac };
+      });
+
+      const sumFloors = entries.reduce((s, e) => s + e.floorShare, 0);
+      let remainder = Math.max(0, newStock - sumFloors);
+      entries.sort((a, b) => b.frac - a.frac);
+      for (let i = 0; i < entries.length && remainder > 0; i++) {
+        entries[i].floorShare += 1;
+        remainder -= 1;
+      }
+
+      entries.forEach((e) => {
+        const underlyingItem = updatedShortages[e.idx];
+        const distributedStock = e.floorShare;
+        const remainingShortage = Math.max(0, underlyingItem.shortage_quantity - distributedStock);
+        const shortageId = underlyingItem._id || `${underlyingItem.bom_name}-${underlyingItem.item_name}`;
+        setLocalShortageEdits((prev) => {
+          const newEdits = new Map(prev);
+          newEdits.set(shortageId, {
+            ...newEdits.get(shortageId),
+            updated_stock: distributedStock > 0 ? distributedStock : null,
           });
-          
-          // Update UI
-          updatedShortages[underlyingIndex] = {
-            ...underlyingItem,
-            updated_stock: distributedStock,
-            remaining_shortage: remainingShortage,
-            is_fully_resolved: remainingShortage === 0,
-          };
-        }
+          return newEdits;
+        });
+        updatedShortages[e.idx] = {
+          ...underlyingItem,
+          updated_stock: distributedStock,
+          remaining_shortage: remainingShortage,
+          is_fully_resolved: remainingShortage === 0,
+        };
       });
       
       setInventoryShortages(updatedShortages);
@@ -568,10 +575,8 @@ const PurchaseOrder: React.FC = () => {
     const item = updatedShortages[itemIndex];
 
     // newStock represents the additional stock to be added
-    // Calculate remaining shortage after adding this stock
-    // Use original shortage quantity if available, otherwise use current
-    const originalShortage = item.original_shortage_quantity || item.shortage_quantity;
-    const remainingShortage = Math.max(0, originalShortage - newStock);
+    // Calculate remaining shortage strictly as shortage_quantity − newStock
+    const remainingShortage = Math.max(0, (item.shortage_quantity || 0) - newStock);
 
     // Track this edit locally by shortage ID to preserve it across refreshes
     const shortageId = item._id || `${item.bom_name}-${item.item_name}`;
@@ -1620,11 +1625,13 @@ const PurchaseOrder: React.FC = () => {
                                     if (item.is_grouped) {
                                       const directInput = groupedItemInputs.get(String(item.item || item.item_name));
                                       if (directInput !== undefined && directInput !== null && directInput > 0) {
+                                      console.log("this is my update stock",directInput)
                                         return String(directInput);
                                       }
                                     }
                                     // Otherwise use the item's updated_stock
                                     if (item.updated_stock !== null && item.updated_stock !== undefined && item.updated_stock > 0) {
+                                      console.log("this is my update stock",item.updated_stock)
                                       return String(item.updated_stock);
                                     }
                                     return "";
@@ -1632,10 +1639,11 @@ const PurchaseOrder: React.FC = () => {
                                 }
                                 onChange={(e) => {
                                   const inputValue = e.target.value;
+
+                                 
                                   const targetId = item.is_grouped
                                     ? String(item.item || item.item_name)
                                     : (item._id || `${item.bom_name}-${item.item_name}`);
-                                  
                                   if (inputValue === "" || inputValue === "-") {
                                     handleStockUpdate(targetId, 0);
                                     return;
@@ -1728,16 +1736,10 @@ const PurchaseOrder: React.FC = () => {
                                     remaining = item.shortage_quantity;
                                   }
                                 } else {
-                                  // For non-grouped items
+                                  // For non-grouped items: strictly shortage_quantity − updated_stock
                                   if (item.updated_stock && item.updated_stock > 0) {
-                                    // User has entered stock - calculate remaining using original shortage
-                                    // Use original_shortage_quantity if available (before any updates)
-                                    // Otherwise use shortage_quantity (might be updated by backend)
-                                    const originalShortage = item.original_shortage_quantity || item.shortage_quantity;
-                                    remaining = Math.max(0, originalShortage - (item.updated_stock || 0));
+                                    remaining = Math.max(0, (item.shortage_quantity || 0) - (item.updated_stock || 0));
                                   } else {
-                                    // No stock entered yet, show current shortage
-                                    // Backend's shortage_quantity is already the remaining if stock was added
                                     remaining = item.shortage_quantity;
                                   }
                                 }
