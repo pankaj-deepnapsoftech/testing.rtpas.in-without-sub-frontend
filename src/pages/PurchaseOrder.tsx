@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   closeAddPurchaseOrderDrawer,
@@ -32,6 +32,7 @@ interface PurchaseOrder {
 }
 
 interface InventoryShortage {
+  _id?: string;
   bom_name: string;
   item_name: string;
   item: string;
@@ -41,6 +42,7 @@ interface InventoryShortage {
   current_stock: number;
   updated_stock?: number | null;
   original_stock: number;
+  original_shortage_quantity?: number; // Store original shortage before updates
   current_price: number;
   updated_price?: number | null;
   price_change?: number;
@@ -49,6 +51,7 @@ interface InventoryShortage {
   remaining_shortage?: number;
   is_fully_resolved?: boolean;
   is_grouped?: boolean;
+  underlying_shortage_ids?: string[]; // Track original shortage IDs when grouped
 }
 
 interface ProductInventory {
@@ -199,6 +202,12 @@ const PurchaseOrder: React.FC = () => {
     useState(false);
   const [selectedRawMaterial, setSelectedRawMaterial] =
     useState<InventoryShortage | null>(null);
+  
+  // Track locally edited shortage entries to preserve user edits even after refresh
+  const [localShortageEdits, setLocalShortageEdits] = useState<Map<string, { updated_stock?: number | null; updated_price?: number | null }>>(new Map());
+  
+  // Track direct input values for grouped items to preserve exact user input
+  const [groupedItemInputs, setGroupedItemInputs] = useState<Map<string, number | null>>(new Map());
 
   // Update Inventory Form state
   const [updateInventoryForm, setUpdateInventoryForm] = useState<
@@ -265,7 +274,7 @@ const PurchaseOrder: React.FC = () => {
       );
 
       if (shortagesResponse.data.success) {
-        const allShortages = shortagesResponse.data.shortages || [];
+        const allShortages = shortagesResponse.data.shortages.filter((item:any)=> item?.approved === true) || [];
 
         console.log("All shortages from API:", allShortages);
 
@@ -283,31 +292,33 @@ const PurchaseOrder: React.FC = () => {
         console.log("Total shortages:", allShortages.length);
         console.log("Raw material shortages:", rawMaterialShortages.length);
 
-        // Remove duplicates based on item ID and add original_stock field to track changes
-        const uniqueShortages = rawMaterialShortages.reduce(
-          (acc: any[], shortage: any) => {
-            const existingIndex = acc.findIndex(
-              (item) => item.item === shortage.item
-            );
-            if (existingIndex === -1) {
-              acc.push(shortage);
-            }
-            return acc;
-          },
-          []
-        );
-
-        const shortagesWithOriginalStock = uniqueShortages.map(
-          (shortage: any) => ({
-            ...shortage,
-            original_stock: shortage.current_stock,
-            updated_price: shortage.updated_price || null,
-            updated_stock: shortage.updated_stock || null,
-          })
+        const shortagesWithOriginalStock = rawMaterialShortages.map(
+          (shortage: any) => {
+            // Preserve local edits if this shortage entry was previously edited
+            const shortageId = shortage._id || `${shortage.bom_name}-${shortage.item_name}`;
+            const localEdit = localShortageEdits.get(shortageId);
+            
+            // Treat the backend-provided shortage as the baseline for local remaining calculation
+            const originalShortageQty = shortage.shortage_quantity || 0;
+            
+            return {
+              ...shortage,
+              original_stock: shortage.current_stock,
+              // Store original shortage quantity before any updates (for remaining calculation)
+              original_shortage_quantity: originalShortageQty,
+              // Use local edit for updated values; ignore backend updated_stock to prevent double subtraction
+              updated_price: localEdit?.updated_price !== undefined 
+                ? localEdit.updated_price 
+                : (shortage.updated_price || null),
+              updated_stock: localEdit?.updated_stock !== undefined 
+                ? localEdit.updated_stock 
+                : null,
+            };
+          }
         );
 
         console.log(
-          "Unique raw material shortages:",
+          "Raw material shortages count:",
           shortagesWithOriginalStock.length
         );
         console.log("Final shortages data:", shortagesWithOriginalStock);
@@ -452,6 +463,8 @@ const PurchaseOrder: React.FC = () => {
     field: keyof InventoryUpdateForm,
     value: number
   ) => {
+
+    console.log("th=u===============>>>>>0",value)
     const updatedForm = [...updateInventoryForm];
     const item = updatedForm[index];
 
@@ -478,16 +491,107 @@ const PurchaseOrder: React.FC = () => {
   };
 
   // Handle stock updates in shortages table (local only - no automatic API call)
-  const handleStockUpdate = (index: number, newStock: number) => {
+  const handleStockUpdate = (itemId: string, newStock: number) => {
+
+    // Check if this is a grouped item by looking it up in groupedShortages
+    const groupedItem = groupedShortages.find(
+      (item) => String(item.item) === String(itemId) || item.item_name?.toLowerCase() === itemId?.toLowerCase()
+    );
+    
+    
+    // If it's a grouped item, update all underlying shortage entries
+    if (groupedItem && groupedItem.is_grouped && groupedItem.underlying_shortage_ids) {
+      // Store the exact user input for the grouped item
+      const groupedKey = String(groupedItem.item || groupedItem.item_name);
+      setGroupedItemInputs((prev) => {
+        const newInputs = new Map(prev);
+        newInputs.set(groupedKey, newStock > 0 ? newStock : null);
+        return newInputs;
+      });
+      
+      const updatedShortages = [...inventoryShortages];
+      const totalShortage = groupedItem.shortage_quantity;
+
+      const indices = groupedItem.underlying_shortage_ids
+        .map((underlyingId: string) =>
+          updatedShortages.findIndex(
+            (item) => item._id === underlyingId || `${item.bom_name}-${item.item_name}` === underlyingId
+          )
+        )
+        .filter((idx: number) => idx !== -1);
+
+      const entries = indices.map((idx: number) => {
+        const u = updatedShortages[idx];
+        const share = (newStock * (u.shortage_quantity / totalShortage)) || 0;
+        const floorShare = Math.floor(share);
+        const frac = share - floorShare;
+        return { idx, floorShare, frac };
+      });
+
+      const sumFloors = entries.reduce((s, e) => s + e.floorShare, 0);
+      let remainder = Math.max(0, newStock - sumFloors);
+      entries.sort((a, b) => b.frac - a.frac);
+      for (let i = 0; i < entries.length && remainder > 0; i++) {
+        entries[i].floorShare += 1;
+        remainder -= 1;
+      }
+
+      entries.forEach((e) => {
+        const underlyingItem = updatedShortages[e.idx];
+        const distributedStock = e.floorShare;
+        const remainingShortage = Math.max(0, underlyingItem.shortage_quantity - distributedStock);
+        const shortageId = underlyingItem._id || `${underlyingItem.bom_name}-${underlyingItem.item_name}`;
+        setLocalShortageEdits((prev) => {
+          const newEdits = new Map(prev);
+          newEdits.set(shortageId, {
+            ...newEdits.get(shortageId),
+            updated_stock: distributedStock > 0 ? distributedStock : null,
+          });
+          return newEdits;
+        });
+        updatedShortages[e.idx] = {
+          ...underlyingItem,
+          updated_stock: distributedStock,
+          remaining_shortage: remainingShortage,
+          is_fully_resolved: remainingShortage === 0,
+        };
+      });
+      
+      setInventoryShortages(updatedShortages);
+      return;
+    }
+    
+    // Original logic for non-grouped items
+    const itemIndex = inventoryShortages.findIndex(
+      (item) => item._id === itemId || `${item.bom_name}-${item.item_name}` === itemId
+    );
+    
+    if (itemIndex === -1) {
+      console.error("Item not found in inventoryShortages:", itemId);
+      return;
+    }
+    
     const updatedShortages = [...inventoryShortages];
-    const item = updatedShortages[index];
+    const item = updatedShortages[itemIndex];
 
     // newStock represents the additional stock to be added
-    // Calculate remaining shortage after adding this stock
-    const remainingShortage = Math.max(0, item.shortage_quantity - newStock);
+    // Calculate remaining shortage strictly as shortage_quantity − newStock
+    const remainingShortage = Math.max(0, (item.shortage_quantity || 0) - newStock);
+
+    // Track this edit locally by shortage ID to preserve it across refreshes
+    const shortageId = item._id || `${item.bom_name}-${item.item_name}`;
+    setLocalShortageEdits((prev) => {
+      const newEdits = new Map(prev);
+      const existingEdit = newEdits.get(shortageId) || {};
+      newEdits.set(shortageId, {
+        ...existingEdit,
+        updated_stock: newStock > 0 ? newStock : null,
+      });
+      return newEdits;
+    });
 
     // Update UI immediately for better user experience
-    updatedShortages[index] = {
+    updatedShortages[itemIndex] = {
       ...item,
       updated_stock: newStock,
       remaining_shortage: remainingShortage, // Add this field to track remaining shortage
@@ -497,12 +601,78 @@ const PurchaseOrder: React.FC = () => {
   };
 
   // Handle price updates in shortages table (local only - no automatic API call)
-  const handlePriceUpdate = (index: number, newPrice: number) => {
+  const handlePriceUpdate = (itemId: string, newPrice: number) => {
+    // Check if this is a grouped item by looking it up in groupedShortages
+    const groupedItem = groupedShortages.find(
+      (item) => String(item.item) === String(itemId) || item.item_name?.toLowerCase() === itemId?.toLowerCase()
+    );
+    
+    // If it's a grouped item, update all underlying shortage entries with the same price
+    if (groupedItem && groupedItem.is_grouped && groupedItem.underlying_shortage_ids) {
+      const updatedShortages = [...inventoryShortages];
+      
+      // Update all underlying shortage entries with the same price
+      groupedItem.underlying_shortage_ids.forEach((underlyingId) => {
+        const underlyingIndex = updatedShortages.findIndex(
+          (item) => item._id === underlyingId || `${item.bom_name}-${item.item_name}` === underlyingId
+        );
+        
+        if (underlyingIndex !== -1) {
+          const underlyingItem = updatedShortages[underlyingIndex];
+          
+          // Track this edit locally
+          const shortageId = underlyingItem._id || `${underlyingItem.bom_name}-${underlyingItem.item_name}`;
+          setLocalShortageEdits((prev) => {
+            const newEdits = new Map(prev);
+            newEdits.set(shortageId, {
+              ...newEdits.get(shortageId),
+              updated_price: newPrice !== underlyingItem.current_price ? newPrice : null,
+            });
+            return newEdits;
+          });
+          
+          // Update UI
+          updatedShortages[underlyingIndex] = {
+            ...underlyingItem,
+            updated_price: newPrice,
+            price_change: newPrice - underlyingItem.current_price,
+            price_change_percentage:
+              ((newPrice - underlyingItem.current_price) / underlyingItem.current_price) * 100,
+          };
+        }
+      });
+      
+      setInventoryShortages(updatedShortages);
+      return;
+    }
+    
+    // Original logic for non-grouped items
+    const itemIndex = inventoryShortages.findIndex(
+      (item) => item._id === itemId || item.item === itemId || `${item.bom_name}-${item.item_name}` === itemId
+    );
+    
+    if (itemIndex === -1) {
+      console.error("Item not found in inventoryShortages:", itemId);
+      return;
+    }
+    
     const updatedShortages = [...inventoryShortages];
-    const item = updatedShortages[index];
+    const item = updatedShortages[itemIndex];
+
+    // Track this edit locally by shortage ID to preserve it across refreshes
+    const shortageId = item._id || `${item.bom_name}-${item.item_name}`;
+    setLocalShortageEdits((prev) => {
+      const newEdits = new Map(prev);
+      const existingEdit = newEdits.get(shortageId) || {};
+      newEdits.set(shortageId, {
+        ...existingEdit,
+        updated_price: newPrice !== item.current_price ? newPrice : null,
+      });
+      return newEdits;
+    });
 
     // Update UI immediately for better user experience
-    updatedShortages[index] = {
+    updatedShortages[itemIndex] = {
       ...item,
       updated_price: newPrice,
       price_change: newPrice - item.current_price,
@@ -590,27 +760,117 @@ const PurchaseOrder: React.FC = () => {
         return;
       }
 
-      // Update prices (now stores in updated_price field)
-      const priceUpdates = itemsWithPriceChanges.map((item) =>
-        axios.put(
-          `${process.env.REACT_APP_BACKEND_URL}product/update-price`,
-          {
-            productId: item.item,
-            newPrice: item.updated_price,
-          },
-          {
-            headers: { Authorization: `Bearer ${cookies?.access_token}` },
-          }
-        )
+      const uniquePriceChanges = new Map<string, number>();
+      itemsWithPriceChanges.forEach((item) => {
+        if (item.updated_price !== null && item.updated_price !== undefined) {
+          uniquePriceChanges.set(item.item, Number(item.updated_price));
+        }
+      });
+
+      const priceUpdates = Array.from(uniquePriceChanges.entries()).map(
+        ([productId, newPrice]) =>
+          axios.put(
+            `${process.env.REACT_APP_BACKEND_URL}product/update-price`,
+            {
+              productId,
+              newPrice,
+            },
+            {
+              headers: { Authorization: `Bearer ${cookies?.access_token}` },
+            }
+          )
       );
 
-      // Update stocks (now stores in updated_stock field)
-      const stockUpdates = itemsWithStockChanges.map((item) =>
+      // Separate grouped and non-grouped items for stock updates
+      const groupedStockUpdates: Map<string, { totalStock: number; itemId: string }> = new Map();
+      const nonGroupedStockUpdates: Array<{ shortageId: string; stockToAdd: number }> = [];
+      const processedGroupedItemIds = new Set<string>();
+
+      itemsWithStockChanges.forEach((item) => {
+        if (!item._id || !item.updated_stock || item.updated_stock <= 0) return;
+
+        // Check if this is a grouped item
+        const groupedItem = groupedShortages.find(
+          (gi) => String(gi.item) === String(item.item) || gi.item_name?.toLowerCase() === item.item_name?.toLowerCase()
+        );
+
+        if (groupedItem && groupedItem.is_grouped) {
+          // For grouped items, use the direct user input (exact value)
+          const groupedKey = String(groupedItem.item || groupedItem.item_name);
+          
+          // Skip if we've already processed this grouped item
+          if (processedGroupedItemIds.has(groupedKey)) {
+            return;
+          }
+          
+          processedGroupedItemIds.add(groupedKey);
+          
+          const directInput = groupedItemInputs.get(groupedKey);
+          
+          if (directInput !== undefined && directInput !== null && directInput > 0) {
+            // Use exact user input for grouped items
+            groupedStockUpdates.set(groupedKey, {
+              totalStock: directInput,
+              itemId: groupedItem.item,
+            });
+          }
+        } else {
+          // For non-grouped items, check if this item is part of a grouped item's underlying shortages
+          // If yes, skip it as it will be handled by the grouped item update
+          const isUnderlyingItem = groupedShortages.some((gi) => {
+            if (gi.is_grouped && gi.underlying_shortage_ids) {
+              return gi.underlying_shortage_ids.includes(item._id || '');
+            }
+            return false;
+          });
+          
+          // Only add if it's not an underlying item of a grouped item
+          if (!isUnderlyingItem) {
+            nonGroupedStockUpdates.push({
+              shortageId: item._id,
+              stockToAdd: item.updated_stock,
+            });
+          }
+        }
+      });
+
+      // Update grouped items: Add exact total stock directly to product
+      const groupedStockUpdateCalls = Array.from(groupedStockUpdates.values()).map(
+        ({ totalStock, itemId }) => {
+          // First get current stock, then add the exact amount
+          return axios.get(
+            `${process.env.REACT_APP_BACKEND_URL}product/${itemId}`,
+            {
+              headers: { Authorization: `Bearer ${cookies?.access_token}` },
+            }
+          ).then((productResponse) => {
+            if (productResponse.data.success) {
+              const currentStock = productResponse.data.product.current_stock || 0;
+              const newStock = currentStock + totalStock; // Add exact user input
+              
+              return axios.put(
+                `${process.env.REACT_APP_BACKEND_URL}product/update-stock-and-shortages`,
+                {
+                  productId: itemId,
+                  newStock: newStock, // Exact total stock
+                },
+                {
+                  headers: { Authorization: `Bearer ${cookies?.access_token}` },
+                }
+              );
+            }
+            throw new Error("Failed to fetch product");
+          });
+        }
+      );
+
+      // Update non-grouped items: Individual shortage updates
+      const individualShortageUpdates = nonGroupedStockUpdates.map(({ shortageId, stockToAdd }) =>
         axios.put(
-          `${process.env.REACT_APP_BACKEND_URL}product/update-stock`,
+          `${process.env.REACT_APP_BACKEND_URL}product/update-individual-shortage`,
           {
-            productId: item.item,
-            newStock: item.updated_stock,
+            shortageId: shortageId,
+            stockToAdd: stockToAdd, // This is the additional stock to add
           },
           {
             headers: { Authorization: `Bearer ${cookies?.access_token}` },
@@ -619,86 +879,70 @@ const PurchaseOrder: React.FC = () => {
       );
 
       // Execute all updates
-      await Promise.all([...priceUpdates, ...stockUpdates]);
+      await Promise.all([...priceUpdates, ...groupedStockUpdateCalls, ...individualShortageUpdates]);
 
-      const uniqueItemsUpdated = new Set([
-        ...itemsWithPriceChanges.map((item) => item.item),
-        ...itemsWithStockChanges.map((item) => item.item),
+      const uniqueProductsUpdated = new Set([
+        ...Array.from(uniquePriceChanges.keys()),
+        ...Array.from(groupedStockUpdates.values()).map((g) => g.itemId),
+        ...nonGroupedStockUpdates.map((item) => {
+          const shortageItem = itemsWithStockChanges.find((s) => s._id === item.shortageId);
+          return shortageItem?.item;
+        }).filter(Boolean),
       ]).size;
 
+      const groupedItemsCount = groupedStockUpdates.size;
+      const individualShortageEntriesCount = nonGroupedStockUpdates.length;
+
       toast.success(
-        `Successfully updated ${uniqueItemsUpdated} items (${itemsWithPriceChanges.length} price updates, ${itemsWithStockChanges.length} stock updates)`
+        `Successfully updated ${uniqueProductsUpdated} products (${uniquePriceChanges.size} price updates, ${groupedItemsCount} grouped items with exact stock, ${individualShortageEntriesCount} individual shortage entries updated)`
       );
 
-      // Handle partial and full shortage resolution
-      const fullyResolvedItems = itemsWithStockChanges.filter(
-        (item) => item.is_fully_resolved === true
-      );
+      // Individual shortage updates are now handled by the update-individual-shortage endpoint
+      // which automatically handles both fully resolved (shortage = 0) and partially resolved cases
+      // So we don't need separate removal/update logic here
 
-      const partiallyResolvedItems = itemsWithStockChanges.filter(
-        (item) =>
-          item.is_fully_resolved === false && (item.remaining_shortage || 0) > 0
-      );
-
-      // Only remove fully resolved items from shortages
-      const removalPromises = fullyResolvedItems.map((item) =>
-        axios
-          .put(
-            `${process.env.REACT_APP_BACKEND_URL}product/remove-from-shortages`,
-            {
-              productId: item.item,
-            },
-            {
-              headers: { Authorization: `Bearer ${cookies?.access_token}` },
-            }
-          )
-          .catch((error) => {
-            // Ignore errors - item might not be in shortages
-            console.log(
-              `Item ${item.item_name} not in shortages or no updates:`,
-              error
-            );
-            return null;
-          })
-      );
-
-      await Promise.all(removalPromises);
-
-      // Update shortage quantities for partially resolved items
-      const updateShortagePromises = partiallyResolvedItems.map((item) =>
-        axios
-          .put(
-            `${process.env.REACT_APP_BACKEND_URL}product/update-shortage-quantity`,
-            {
-              productId: item.item,
-              newShortageQuantity: item.remaining_shortage,
-            },
-            {
-              headers: { Authorization: `Bearer ${cookies?.access_token}` },
-            }
-          )
-          .catch((error) => {
-            console.log(
-              `Failed to update shortage quantity for ${item.item_name}:`,
-              error
-            );
-            return null;
-          })
-      );
-
-      await Promise.all(updateShortagePromises);
-
-      if (fullyResolvedItems.length > 0) {
-        toast.success(
-          `Fully resolved and removed ${fullyResolvedItems.length} items from shortages`
+      // Clear local edits for processed items after successful submission
+      const submittedShortageIds = new Set<string>();
+      
+      // Add non-grouped items' shortage IDs
+      nonGroupedStockUpdates.forEach(({ shortageId }) => {
+        submittedShortageIds.add(shortageId);
+      });
+      
+      // Add grouped items' underlying shortage IDs
+      groupedStockUpdates.forEach((_, groupedKey) => {
+        const groupedItem = groupedShortages.find(
+          (gi) => String(gi.item || gi.item_name) === groupedKey
         );
-      }
-
-      // if (partiallyResolvedItems.length > 0) {
-      //   toast.success(
-      //     `📝 Partially resolved ${partiallyResolvedItems.length} items - shortages updated`
-      //   );
-      // }
+        if (groupedItem && groupedItem.underlying_shortage_ids) {
+          groupedItem.underlying_shortage_ids.forEach((id) => {
+            submittedShortageIds.add(id);
+          });
+        }
+      });
+      
+      itemsWithPriceChanges.forEach((item) => {
+        if (item._id) {
+          submittedShortageIds.add(item._id);
+        }
+      });
+      
+      setLocalShortageEdits((prev) => {
+        const newEdits = new Map(prev);
+        submittedShortageIds.forEach((id) => {
+          newEdits.delete(id);
+        });
+        return newEdits;
+      });
+      
+      // Clear grouped item inputs after successful submission
+      setGroupedItemInputs((prev) => {
+        const newInputs = new Map(prev);
+        groupedStockUpdates.forEach((_, key) => {
+          newInputs.delete(key);
+        });
+        return newInputs;
+      });
 
       // Refresh all data to sync across components
       await Promise.all([
@@ -839,6 +1083,118 @@ const PurchaseOrder: React.FC = () => {
     fetchPurchaseOrders();
   }, [refreshTrigger]);
 
+  // Filter out fully resolved items (shortage_quantity = 0 and remaining_shortage = 0)
+  const activeShortages = useMemo(() => {
+    return inventoryShortages.filter((item) => {
+      const remainingShortage = item.remaining_shortage !== undefined 
+        ? item.remaining_shortage 
+        : (item.updated_stock && item.updated_stock > 0 
+            ? Math.max(0, item.shortage_quantity - item.updated_stock)
+            : item.shortage_quantity);
+      return item.shortage_quantity > 0 || remainingShortage > 0;
+    });
+  }, [inventoryShortages]);
+
+  // Group and combine duplicate raw materials by adding their shortage quantities
+  const groupedShortages = useMemo(() => {
+    const groupedMap = new Map<string, InventoryShortage>();
+    
+    activeShortages.forEach((item) => {
+      // Use item ID as key for grouping, fallback to item_name if ID not available
+      const key = String(item.item || item.item_name?.toLowerCase() || '');
+      
+      if (!key || key === 'undefined' || key === 'null') return;
+      
+      const shortageId = item._id || `${item.bom_name}-${item.item_name}`;
+      
+      if (groupedMap.has(key)) {
+        const existing = groupedMap.get(key)!;
+        
+        // Combine shortage quantities
+        const combinedShortage = existing.shortage_quantity + item.shortage_quantity;
+        
+        // Combine updated stocks if both have them
+        const combinedUpdatedStock = (existing.updated_stock || 0) + (item.updated_stock || 0);
+        
+        // Calculate combined remaining shortage
+        const combinedRemainingShortage = Math.max(0, combinedShortage - combinedUpdatedStock);
+        
+        // Use the most recent updated_at
+        const mostRecentUpdate = new Date(existing.updated_at) > new Date(item.updated_at)
+          ? existing.updated_at
+          : item.updated_at;
+        
+        // Use the most recent price if different, otherwise keep existing
+        const latestPrice = new Date(existing.updated_at) > new Date(item.updated_at)
+          ? existing.current_price
+          : item.current_price;
+        
+        // Combine BOM names (show all BOMs this material is used in)
+        const combinedBomNames = existing.bom_name 
+          ? `${existing.bom_name}, ${item.bom_name || ''}`
+          : (item.bom_name || '');
+        
+        // Track underlying shortage IDs for grouped items
+        const existingIds = existing.underlying_shortage_ids || [existing._id || shortageId].filter(Boolean);
+        const newIds = item._id ? [item._id] : [shortageId];
+        const allUnderlyingIds = [...existingIds, ...newIds];
+        
+        // Check if there's a direct user input for this grouped item
+        const directInput = groupedItemInputs.get(key);
+        let finalUpdatedStock: number | null;
+        let finalRemainingShortage: number;
+        
+        if (directInput !== undefined && directInput !== null && directInput > 0) {
+          finalUpdatedStock = directInput;
+          finalRemainingShortage = Math.max(0, combinedShortage - directInput);
+        } else {
+          finalUpdatedStock = combinedUpdatedStock > 0 ? combinedUpdatedStock : null;
+          finalRemainingShortage = combinedRemainingShortage;
+        }
+        
+        groupedMap.set(key, {
+          ...existing,
+          shortage_quantity: combinedShortage,
+          updated_stock: finalUpdatedStock,
+          remaining_shortage: finalRemainingShortage,
+          is_fully_resolved: finalRemainingShortage === 0,
+          updated_at: mostRecentUpdate,
+          current_price: latestPrice,
+          bom_name: combinedBomNames,
+          is_grouped: true, // Mark as grouped for display purposes
+          underlying_shortage_ids: allUnderlyingIds,
+        });
+      } else {
+        // First occurrence, add to map
+        // Check if there's a direct user input for this item
+        const directInput = groupedItemInputs.get(key);
+        let finalUpdatedStock: number | null;
+        
+        if (directInput !== undefined && directInput !== null && directInput > 0) {
+          finalUpdatedStock = directInput;
+        } else {
+          finalUpdatedStock = item.updated_stock || null;
+        }
+        
+        const finalRemainingShortage = item.remaining_shortage !== undefined 
+          ? item.remaining_shortage 
+          : (finalUpdatedStock && finalUpdatedStock > 0 
+              ? Math.max(0, item.shortage_quantity - finalUpdatedStock)
+              : item.shortage_quantity);
+        
+        groupedMap.set(key, {
+          ...item,
+          updated_stock: finalUpdatedStock,
+          remaining_shortage: finalRemainingShortage,
+          is_fully_resolved: finalRemainingShortage === 0,
+          underlying_shortage_ids: item._id ? [item._id] : [shortageId],
+        });
+      }
+    });
+    
+    return Array.from(groupedMap.values());
+  }, [activeShortages, groupedItemInputs]);
+
   // Filter purchase orders based on search key
   useEffect(() => {
     const searchLower = searchKey.toLowerCase();
@@ -884,7 +1240,6 @@ const PurchaseOrder: React.FC = () => {
   const handlePurchaseOrderDataChange = () => {
     refreshTableData();
   };
-
   return (
     <div className="min-h-screen bg-gray-50 p-2 lg:p-3">
       {isAddPurchaseOrderDrawerOpened && (
@@ -1100,7 +1455,7 @@ const PurchaseOrder: React.FC = () => {
                 <div className="flex justify-center items-center py-8">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                 </div>
-              ) : inventoryShortages.length === 0 ? (
+              ) : groupedShortages.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
                   <svg
                     className="mx-auto h-12 w-12 text-gray-400"
@@ -1135,7 +1490,7 @@ const PurchaseOrder: React.FC = () => {
                           Total Items:
                         </span>
                         <span className="ml-2 text-blue-900">
-                          {inventoryShortages.length}
+                          {groupedShortages.length}
                         </span>
                       </div>
                       <div>
@@ -1144,7 +1499,7 @@ const PurchaseOrder: React.FC = () => {
                         </span>
                         <span className="ml-2 text-blue-900">
                           {
-                            inventoryShortages.filter(
+                            groupedShortages.filter(
                               (item) =>
                                 item.updated_price &&
                                 item.updated_price !== item.current_price
@@ -1158,7 +1513,7 @@ const PurchaseOrder: React.FC = () => {
                         </span>
                         <span className="ml-2 text-blue-900">
                           {
-                            inventoryShortages.filter(
+                            groupedShortages.filter(
                               (item) =>
                                 item.updated_stock && item.updated_stock > 0
                             ).length
@@ -1171,27 +1526,37 @@ const PurchaseOrder: React.FC = () => {
                         </span>
                         <span
                           className={`ml-2 font-semibold ${
-                            inventoryShortages.reduce((total, item) => {
+                            groupedShortages.reduce((total, item) => {
                               const change =
                                 item.updated_price &&
                                 item.updated_price !== null
                                   ? item.updated_price - item.current_price
                                   : 0;
-                              return total + change * item.shortage_quantity;
+                              const remainingShortage = item.remaining_shortage !== undefined 
+                                ? item.remaining_shortage 
+                                : (item.updated_stock && item.updated_stock > 0 
+                                    ? Math.max(0, item.shortage_quantity - item.updated_stock)
+                                    : item.shortage_quantity);
+                              return total + change * remainingShortage;
                             }, 0) > 0
                               ? "text-red-600"
                               : "text-green-600"
                           }`}
                         >
                           ₹
-                          {inventoryShortages
+                          {groupedShortages
                             .reduce((total, item) => {
                               const change =
                                 item.updated_price &&
                                 item.updated_price !== null
                                   ? item.updated_price - item.current_price
                                   : 0;
-                              return total + change * item.shortage_quantity;
+                              const remainingShortage = item.remaining_shortage !== undefined 
+                                ? item.remaining_shortage 
+                                : (item.updated_stock && item.updated_stock > 0 
+                                    ? Math.max(0, item.shortage_quantity - item.updated_stock)
+                                    : item.shortage_quantity);
+                              return total + change * remainingShortage;
                             }, 0)
                             .toFixed(2)}
                         </span>
@@ -1240,8 +1605,8 @@ const PurchaseOrder: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {inventoryShortages.map((item, idx) => (
-                          <tr key={idx} className="hover:bg-gray-50">
+                        {groupedShortages.map((item, idx) => (
+                          <tr key={item._id || `${item.bom_name}-${item.item_name}-${idx}`} className="hover:bg-gray-50">
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {item.bom_name || "-"}
                             </td>
@@ -1255,27 +1620,83 @@ const PurchaseOrder: React.FC = () => {
                               <input
                                 type="number"
                                 value={
-                                  item.updated_stock !== null
-                                    ? item.updated_stock
-                                    : 0
+                                  (() => {
+                                    // For grouped items, check direct input first
+                                    if (item.is_grouped) {
+                                      const directInput = groupedItemInputs.get(String(item.item || item.item_name));
+                                      if (directInput !== undefined && directInput !== null && directInput > 0) {
+                                      console.log("this is my update stock",directInput)
+                                        return String(directInput);
+                                      }
+                                    }
+                                    // Otherwise use the item's updated_stock
+                                    if (item.updated_stock !== null && item.updated_stock !== undefined && item.updated_stock > 0) {
+                                      console.log("this is my update stock",item.updated_stock)
+                                      return String(item.updated_stock);
+                                    }
+                                    return "";
+                                  })()
                                 }
-                                onChange={(e) =>
-                                  handleStockUpdate(idx, Number(e.target.value))
-                                }
-                                className={`w-20 px-2 py-1 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                                onChange={(e) => {
+                                  const inputValue = e.target.value;
+
+                                 
+                                  const targetId = item.is_grouped
+                                    ? String(item.item || item.item_name)
+                                    : (item._id || `${item.bom_name}-${item.item_name}`);
+                                  if (inputValue === "" || inputValue === "-") {
+                                    handleStockUpdate(targetId, 0);
+                                    return;
+                                  }
+                                  
+                                  const cleanValue = inputValue.replace(/[^0-9]/g, '');
+                                  
+                                  if (cleanValue === "") {
+                                    handleStockUpdate(targetId, 0);
+                                    return;
+                                  }
+                                  
+                                  const numValue = parseInt(cleanValue, 10);
+                                  
+                                  if (!isNaN(numValue) && numValue >= 0) {
+                                    handleStockUpdate(targetId, numValue);
+                                  }
+                                }}
+                                onKeyDown={(e) => {
+                                  // Allow: backspace, delete, tab, escape, enter, decimal point, and numbers
+                                  if (
+                                    [46, 8, 9, 27, 13, 110, 190].indexOf(e.keyCode) !== -1 ||
+                                    // Allow: Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X
+                                    (e.keyCode === 65 && e.ctrlKey === true) ||
+                                    (e.keyCode === 67 && e.ctrlKey === true) ||
+                                    (e.keyCode === 86 && e.ctrlKey === true) ||
+                                    (e.keyCode === 88 && e.ctrlKey === true) ||
+                                    // Allow: home, end, left, right
+                                    (e.keyCode >= 35 && e.keyCode <= 39)
+                                  ) {
+                                    return;
+                                  }
+                                  // Ensure that it is a number and stop the keypress
+                                  if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && (e.keyCode < 96 || e.keyCode > 105)) {
+                                    e.preventDefault();
+                                  }
+                                }}
+                                className={`w-28 px-3 py-2 border-2 rounded-md text-sm font-medium cursor-text focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all ${  
                                   item.updated_stock &&
                                   item.updated_stock > 0 &&
                                   item.updated_stock < item.shortage_quantity
-                                    ? "border-orange-500 bg-orange-50"
+                                    ? "border-orange-500 bg-orange-50 text-orange-900"
                                     : item.updated_stock &&
                                       item.updated_stock >=
                                         item.shortage_quantity
-                                    ? "border-green-500 bg-green-50"
-                                    : "border-gray-300"
+                                    ? "border-green-500 bg-green-50 text-green-900"
+                                    : "border-blue-300 bg-blue-50 text-gray-900 hover:border-blue-400 hover:bg-blue-100"
                                 }`}
                                 placeholder="0"
                                 min="0"
                                 step="1"
+                                disabled={false}
+                                readOnly={false}
                               />
                               {item.updated_stock && item.updated_stock > 0 && (
                                 <div
@@ -1297,21 +1718,48 @@ const PurchaseOrder: React.FC = () => {
                               {item.shortage_quantity}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm">
-                              {item.updated_stock && item.updated_stock > 0 ? (
-                                <span
-                                  className={`font-semibold ${
-                                    (item.remaining_shortage || 0) > 0
-                                      ? "text-orange-600"
-                                      : "text-green-600"
-                                  }`}
-                                >
-                                  {item.remaining_shortage || 0}
-                                </span>
-                              ) : (
-                                <span className="text-red-600 font-semibold">
-                                  {item.shortage_quantity}
-                                </span>
-                              )}
+                              {(() => {
+                                // Calculate remaining shortage correctly
+                                let remaining: number;
+                                
+                                if (item.is_grouped) {
+                                  // For grouped items, calculate from user input
+                                  const directInput = groupedItemInputs.get(String(item.item || item.item_name));
+                                  if (directInput !== undefined && directInput !== null && directInput > 0) {
+                                    // User has entered stock, calculate remaining
+                                    remaining = Math.max(0, item.shortage_quantity - directInput);
+                                  } else if (item.remaining_shortage !== undefined) {
+                                    // Use stored remaining shortage
+                                    remaining = item.remaining_shortage;
+                                  } else {
+                                    // No update yet, show full shortage
+                                    remaining = item.shortage_quantity;
+                                  }
+                                } else {
+                                  // For non-grouped items: strictly shortage_quantity − updated_stock
+                                  if (item.updated_stock && item.updated_stock > 0) {
+                                    remaining = Math.max(0, (item.shortage_quantity || 0) - (item.updated_stock || 0));
+                                  } else {
+                                    remaining = item.shortage_quantity;
+                                  }
+                                }
+                                
+                                const hasStockUpdate = item.updated_stock && item.updated_stock > 0;
+                                
+                                return (
+                                  <span
+                                    className={`font-semibold ${
+                                      remaining > 0
+                                        ? hasStockUpdate
+                                          ? "text-orange-600"
+                                          : "text-red-600"
+                                        : "text-green-600"
+                                    }`}
+                                  >
+                                    {remaining}
+                                  </span>
+                                );
+                              })()}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               ₹{item.current_price}
@@ -1324,9 +1772,12 @@ const PurchaseOrder: React.FC = () => {
                                     ? item.updated_price
                                     : item.current_price
                                 }
-                                onChange={(e) =>
-                                  handlePriceUpdate(idx, Number(e.target.value))
-                                }
+                                onChange={(e) => {
+                                  const targetId = item.is_grouped
+                                    ? String(item.item || item.item_name)
+                                    : (item._id || `${item.bom_name}-${item.item_name}`);
+                                  handlePriceUpdate(targetId, Number(e.target.value));
+                                }}
                                 className="w-20 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                 placeholder={item.current_price.toString()}
                                 min="0"

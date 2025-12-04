@@ -160,7 +160,8 @@ const AddProcess: React.FC<AddProcess> = ({
       if (!data.success) {
         throw new Error(data.message);
       }
-      setBoms(data.boms);
+      const approveBom = data?.boms?.filter((item: any) => item?.approved === true)
+      setBoms(approveBom);
     } catch (error: any) {
       toast.error(error.message || "Something went wrong");
     }
@@ -297,7 +298,7 @@ const AddProcess: React.FC<AddProcess> = ({
                 <Factory className="h-5 w-5 text-black" />
               </div>
               <h2 className="text-xl font-semibold text-black">
-                Add Production Process
+                Add Production Process 
               </h2>
             </div>
             <button
@@ -388,6 +389,7 @@ const AddProcess: React.FC<AddProcess> = ({
                     <input
                       type="number"
                       value={quantity || ""}
+                      readOnly={true}
                       onChange={(e) => setQuantity(+e.target.value)}
                       placeholder="Enter quantity"
                       className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors bg-white text-gray-900"
