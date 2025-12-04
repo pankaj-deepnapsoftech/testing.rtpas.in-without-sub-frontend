@@ -274,7 +274,7 @@ const PurchaseOrder: React.FC = () => {
       );
 
       if (shortagesResponse.data.success) {
-        const allShortages = shortagesResponse.data.shortages || [];
+        const allShortages = shortagesResponse.data.shortages.filter((item:any)=> item?.approved === true) || [];
 
         console.log("All shortages from API:", allShortages);
 
