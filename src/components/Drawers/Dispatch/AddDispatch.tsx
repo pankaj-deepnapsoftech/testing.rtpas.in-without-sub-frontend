@@ -25,6 +25,7 @@ const AddDispatch: React.FC<AddDispatchProps> = ({
   editDispatch,
   newDispatch
 }) => {
+
   const [cookies] = useCookies();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [salesOrders, setSalesOrders] = useState([]);
@@ -80,7 +81,7 @@ const AddDispatch: React.FC<AddDispatchProps> = ({
 
       // Get order quantity for validation
       const orderQuantity =
-        selectedOrder?.product_qty || editDispatch?.quantity ||selectedOrder?.product_qty ||  0;
+        selectedOrder?.product_qty || editDispatch?.quantity || selectedOrder?.product_qty || 0;
 
       // Get product ID
       const firstProductId =
@@ -242,7 +243,9 @@ const AddDispatch: React.FC<AddDispatchProps> = ({
 
   useEffect(() => {
     if (newDispatch) {
-      setSelectedOrder(newDispatch)
+      setSelectedOrder(newDispatch);
+    } else {
+      setSelectedOrder(null);
     }
   }, [newDispatch])
 
@@ -267,7 +270,7 @@ const AddDispatch: React.FC<AddDispatchProps> = ({
               </h2>
             </div>
             <button
-              onClick={() => {setShow(false);setSelectedOrder(null)}}
+              onClick={() => { setShow(false) }}
               className="p-2 rounded-lg border transition-colors"
               style={{ borderColor: colors.border.medium }}
             >
@@ -452,7 +455,7 @@ const AddDispatch: React.FC<AddDispatchProps> = ({
                       <p className="text-sm text-gray-900">
                         ₹
                         {selectedOrder?.total_price ||
-                          ((selectedOrder?.price *  selectedOrder?.product_qty)+((selectedOrder?.price *  selectedOrder?.product_qty)*selectedOrder?.GST)/100) ||
+                          ((selectedOrder?.price * selectedOrder?.product_qty) + ((selectedOrder?.price * selectedOrder?.product_qty) * selectedOrder?.GST) / 100) ||
                           "N/A"}
                       </p>
                     </div>
@@ -744,7 +747,7 @@ const AddDispatch: React.FC<AddDispatchProps> = ({
                       parseInt(editDispatch?.dispatch_qty) || 0;
                     const totalDispatchQty = editDispatch
                       ? currentDispatchQty + value
-                      : value ;
+                      : value;
 
                     // Check against order quantity first
                     if (totalDispatchQty > orderQuantity) {
@@ -823,7 +826,7 @@ const AddDispatch: React.FC<AddDispatchProps> = ({
                         0;
                       const currentDispatchQty =
                         parseInt(editDispatch?.dispatch_qty) || 0;
-                      const enteredQty = parseInt(values.dispatch_qty)  || 0;
+                      const enteredQty = parseInt(values.dispatch_qty) || 0;
 
                       const totalDispatchQty = editDispatch
                         ? currentDispatchQty + enteredQty

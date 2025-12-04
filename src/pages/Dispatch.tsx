@@ -16,6 +16,7 @@ import { colors } from "../theme/colors";
 import { MdAdd, MdOutlineRefresh } from "react-icons/md";
 import AddDispatch from "../components/Drawers/Dispatch/AddDispatch";
 import PartyStrip from "../ui/DispatchStrip";
+import { axiosHandler } from "../config/axios";
 
 const Dispatch = () => {
   const [paymentFilter, setPaymentFilter] = useState("All");
@@ -27,7 +28,6 @@ const Dispatch = () => {
   const [cookies] = useCookies();
   const [data, setData] = useState([]);
 
-  console.log("this is the data",data)
   const [page, setPage] = useState(1);
   const [editDispatch, setEditDispatch] = useState(null);
 
@@ -59,7 +59,6 @@ const Dispatch = () => {
       typeof dispatch.invoice !== "object" ||
       !dispatch.invoice.total
     ) {
-      console.log("No valid invoice data found - returning Unpaid");
       return "Unpaid";
     }
 
@@ -336,11 +335,12 @@ const Dispatch = () => {
   };
 
 
-  console.log("d Data", data)
 
   useEffect(() => {
     GetDispatch();
   }, [page, productFilter, paymentFilter, searchTerm]);
+
+
 
   if (isLoading) {
     return (
@@ -915,38 +915,7 @@ const Dispatch = () => {
                                     {dispatch?.dispatch_qty || "N/A"}
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className="font-medium"
-                                    style={{ color: colors.text.primary }}
-                                  >
-                                    Remaining Qty:
-                                  </span>
-                                  <span
-                                    style={{
-                                      color: (() => {
-                                        const orderQty =
-                                          parseInt(dispatch?.quantity) || 0;
-                                        const dispatchQty =
-                                          parseInt(dispatch?.dispatch_qty) || 0;
-                                        const remaining =
-                                          orderQty - dispatchQty;
-                                        return remaining > 0
-                                          ? colors.text.secondary
-                                          : colors.text.secondary;
-                                      })(),
-                                    }}
-                                  >
-                                    {(() => {
-                                      const orderQty =
-                                        parseInt(dispatch?.quantity) || 0;
-                                      const dispatchQty =
-                                        parseInt(dispatch?.dispatch_qty) || 0;
-                                      const remaining = orderQty - dispatchQty;
-                                      return remaining >= 0 ? remaining : "N/A";
-                                    })()}
-                                  </span>
-                                </div>
+                               
                               </div>
                             </div>
 
