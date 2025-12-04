@@ -158,6 +158,11 @@ const BOMRawMaterialTable: React.FC<BOMRawMaterialTableProps> = ({
         Header: "Category",
         accessor: "category",
       },
+
+      {
+        Header: "Sub Category",
+        accessor: "sub_category",
+      },
       {
         Header: "Type",
         accessor: "item_type",
@@ -181,6 +186,18 @@ const BOMRawMaterialTable: React.FC<BOMRawMaterialTableProps> = ({
       {
         Header: "Current stock",
         accessor: "current_stock",
+      },
+      {
+        Header: "Last Change",
+        accessor: "change",
+      },
+      {
+        Header: "Min stock",
+        accessor: "min_stock",
+      },
+      {
+        Header: "Max stock",
+        accessor: "max_stock",
       },
       {
         Header: "Created On",

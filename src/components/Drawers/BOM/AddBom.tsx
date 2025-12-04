@@ -236,7 +236,7 @@ const AddBom: React.FC<AddBomProps> = ({
         customId: r.customId,
       })),
     };
-
+    
     try {
       const response = await addBom(body).unwrap();
 
@@ -267,6 +267,7 @@ const AddBom: React.FC<AddBomProps> = ({
     }
   };
 
+  // Function to update scrap quantities in scrap management
   const updateScrapQuantities = async (scrapMaterialsToUpdate: any[]) => {
     try {
       const updatePromises = scrapMaterialsToUpdate.map(
@@ -274,6 +275,7 @@ const AddBom: React.FC<AddBomProps> = ({
           const scrapId = scrapMaterial.item || scrapMaterial.scrap_id;
           const quantityToAdd = Number(scrapMaterial.quantity) || 0;
 
+          // Find the current scrap from catalog
           const currentScrap = scrapCatalog.find((s: any) => s._id === scrapId);
           if (!currentScrap) {
             console.warn(`Scrap with ID ${scrapId} not found in catalog`);
@@ -283,6 +285,7 @@ const AddBom: React.FC<AddBomProps> = ({
           const currentQty = Number(currentScrap.qty) || 0;
           const newQty = currentQty + quantityToAdd;
 
+          // Update the scrap quantity
           const updateResponse = await fetch(
             `${process.env.REACT_APP_BACKEND_URL}scrap/update/${scrapId}`,
             {

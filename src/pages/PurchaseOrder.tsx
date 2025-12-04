@@ -329,21 +329,27 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
             const shortageId = shortage._id || `${shortage.bom_name}-${shortage.item_name}`;
             const localEdit = localShortageEdits.get(shortageId);
             
-            // Treat the backend-provided shortage as the baseline for local remaining calculation
-            const originalShortageQty = shortage.shortage_quantity || 0;
+            // Calculate original shortage quantity
+            // If there's a local edit with updated_stock, original = current + updated_stock
+            // Otherwise, current shortage_quantity is the original
+            let originalShortageQty = shortage.shortage_quantity || 0;
+            if (localEdit?.updated_stock && localEdit.updated_stock > 0) {
+              // If stock was added, original shortage = current + stock added
+              originalShortageQty = shortage.shortage_quantity + localEdit.updated_stock;
+            }
             
             return {
               ...shortage,
               original_stock: shortage.current_stock,
               // Store original shortage quantity before any updates (for remaining calculation)
               original_shortage_quantity: originalShortageQty,
-              // Use local edit for updated values; ignore backend updated_stock to prevent double subtraction
+              // Use local edit if exists, otherwise use backend value
               updated_price: localEdit?.updated_price !== undefined 
                 ? localEdit.updated_price 
                 : (shortage.updated_price || null),
               updated_stock: localEdit?.updated_stock !== undefined 
                 ? localEdit.updated_stock 
-                : null,
+                : (shortage.updated_stock || null),
             };
           }
         );
@@ -494,8 +500,6 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
     field: keyof InventoryUpdateForm,
     value: number
   ) => {
-
-    console.log("th=u===============>>>>>0",value)
     const updatedForm = [...updateInventoryForm];
     const item = updatedForm[index];
 
@@ -829,7 +833,7 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
       const processedGroupedItemIds = new Set<string>();
 
       itemsWithStockChanges.forEach((item) => {
-        if (!item.updated_stock || item.updated_stock <= 0) return;
+        if (!item._id || !item.updated_stock || item.updated_stock <= 0) return;
 
         // Check if this is a grouped item
         const groupedItem = groupedShortages.find(
@@ -850,21 +854,13 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
           processedGroupedItemIds.add(groupedKey);
           
           const directInput = groupedItemInputs.get(groupedKey);
-          const totalStock =
-            directInput !== undefined && directInput !== null && directInput > 0
-              ? directInput
-              : item.updated_stock;
           
-          const productIdForGroup = (groupedItem.item || item.item) ? String(groupedItem.item || item.item) : "";
-
-          if (totalStock && totalStock > 0 && productIdForGroup) {
+          if (directInput !== undefined && directInput !== null && directInput > 0) {
             // Use exact user input for grouped items
             groupedStockUpdates.set(groupedKey, {
-              totalStock,
-              itemId: productIdForGroup,
+              totalStock: directInput,
+              itemId: groupedItem.item,
             });
-          } else if (!productIdForGroup) {
-            console.warn("Skipping grouped stock update due to missing product ID for", groupedKey);
           }
         } else {
           // For non-grouped items, check if this item is part of a grouped item's underlying shortages
@@ -877,7 +873,7 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
           });
           
           // Only add if it's not an underlying item of a grouped item
-          if (!isUnderlyingItem && item._id) {
+          if (!isUnderlyingItem) {
             nonGroupedStockUpdates.push({
               shortageId: item._id,
               stockToAdd: item.updated_stock,
@@ -1714,13 +1710,11 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
                                     if (item.is_grouped) {
                                       const directInput = groupedItemInputs.get(getShortageKey(item));
                                       if (directInput !== undefined && directInput !== null && directInput > 0) {
-                                      console.log("this is my update stock",directInput)
                                         return String(directInput);
                                       }
                                     }
                                     // Otherwise use the item's updated_stock
                                     if (item.updated_stock !== null && item.updated_stock !== undefined && item.updated_stock > 0) {
-                                      console.log("this is my update stock",item.updated_stock)
                                       return String(item.updated_stock);
                                     }
                                     return "";
@@ -1822,10 +1816,16 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
                                     remaining = item.shortage_quantity;
                                   }
                                 } else {
-                                  // For non-grouped items: strictly shortage_quantity − updated_stock
+                                  // For non-grouped items
                                   if (item.updated_stock && item.updated_stock > 0) {
-                                    remaining = Math.max(0, (item.shortage_quantity || 0) - (item.updated_stock || 0));
+                                    // User has entered stock - calculate remaining using original shortage
+                                    // Use original_shortage_quantity if available (before any updates)
+                                    // Otherwise use shortage_quantity (might be updated by backend)
+                                    const originalShortage = item.original_shortage_quantity || item.shortage_quantity;
+                                    remaining = Math.max(0, originalShortage - (item.updated_stock || 0));
                                   } else {
+                                    // No stock entered yet, show current shortage
+                                    // Backend's shortage_quantity is already the remaining if stock was added
                                     remaining = item.shortage_quantity;
                                   }
                                 }
