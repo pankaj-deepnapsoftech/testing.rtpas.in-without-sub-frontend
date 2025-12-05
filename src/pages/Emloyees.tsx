@@ -7,6 +7,8 @@ import { useEffect, useState } from "react";
 import { toast } from "react-toastify";
 import { useCookies } from "react-cookie";
 import { useDispatch, useSelector } from "react-redux";
+import AddEmployeeModal from "../components/Modals/AddEmployeeModal";
+
 import {
   closeAddEmployeeDrawer,
   closeEmployeeDetailsDrawer,
@@ -18,8 +20,12 @@ import {
 import EmployeeTable from "../components/Table/EmployeeTable";
 import EmployeeDetails from "../components/Drawers/Employee/EmployeeDetails";
 import UpdateEmployee from "../components/Drawers/Employee/UpdateEmployee";
+import AddBom from "../components/Drawers/BOM/AddBom";
+import { IoAdd } from "react-icons/io5";
 
 const Employees: React.FC = () => {
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+
   const { isSuper, allowedroutes } = useSelector((state: any) => state.auth);
   const isAllowed = isSuper || allowedroutes.includes("employee");
   const [cookies] = useCookies();
@@ -215,6 +221,26 @@ const Employees: React.FC = () => {
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-3">
             <Button
+              leftIcon={<IoAdd size={18} />}
+              size="md"
+              onClick={() => setIsAddModalOpen(true)}
+              color="white"
+              bg="#3B82F6"
+              _hover={{
+                bg: "#2563EB",
+                transform: "translateY(-2px)",
+                boxShadow: "lg",
+              }}
+              _active={{
+                transform: "translateY(0)",
+                boxShadow: "md",
+              }}
+              className="transition-all duration-200 rounded-xl"
+            >
+              Add Employee
+            </Button>
+
+            <Button
               onClick={fetchEmployeesHandler}
               leftIcon={<MdOutlineRefresh />}
               variant="outline"
@@ -254,6 +280,12 @@ const Employees: React.FC = () => {
           isLoadingEmployees={isLoadingEmployees}
           approveEmployeeHandler={approveEmployeeHandler}
           bulkApproveEmployeesHandler={bulkApproveEmployeesHandler}
+        />
+
+        <AddEmployeeModal
+          isOpen={isAddModalOpen}
+          onClose={() => setIsAddModalOpen(false)}
+          fetchEmployees={fetchEmployeesHandler}
         />
       </div>
     </div>
