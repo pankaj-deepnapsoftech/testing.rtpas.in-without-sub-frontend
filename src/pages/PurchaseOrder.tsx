@@ -305,7 +305,10 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
       );
 
       if (shortagesResponse.data.success) {
-        const allShortages = shortagesResponse.data.shortages || [];
+        const allShortages =
+          shortagesResponse.data.shortages.filter(
+            (item: any) => item?.approved === true
+          ) || [];
 
         console.log("All shortages from API:", allShortages);
 
@@ -1654,9 +1657,9 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
                     <table className="min-w-full divide-y divide-gray-200">
                       <thead className="bg-gray-50">
                         <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          {/* <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             BOM Name
-                          </th>
+                          </th> */}
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Item Name
                           </th>
@@ -1692,9 +1695,9 @@ const getShortageKey = (shortage?: InventoryShortage | null) =>
                       <tbody className="bg-white divide-y divide-gray-200">
                         {groupedShortages.map((item, idx) => (
                           <tr key={item._id || `${item.bom_name}-${item.item_name}-${idx}`} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {/* <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {item.bom_name || "-"}
-                            </td>
+                            </td> */}
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {item.item_name || "-"}
                             </td>
